@@ -3,6 +3,9 @@ from scipy.spatial import distance as dist
 from collections import OrderedDict
 import numpy as np
 import math
+import cv2
+from helpers import *
+
 
 def calculate_distance(x1, y1, x2, y2, x0, y0):
     denominator = (y2 - y1) * x0 - (x2 - x1) * y0 + x2 * y1 - y2 * x1
@@ -17,7 +20,7 @@ def calculate_distance(x1, y1, x2, y2, x0, y0):
 
 
 class CentroidTracker():
-    def __init__(self, maxDisappeared=3):
+    def __init__(self, maxDisappeared=2):
         # initialize the next unique object ID along with two ordered
         # dictionaries used to keep track of mapping a given object
         # ID to its centroid and number of consecutive frames it has
@@ -26,6 +29,8 @@ class CentroidTracker():
         self.objects = OrderedDict()
         self.disappeared = OrderedDict()
         self.added = OrderedDict()
+        self.type = ""
+        self.total_sum = 0
 
         # store the number of maximum consecutive frames a given
         # object is allowed to be marked as "disappeared" until we
@@ -34,10 +39,32 @@ class CentroidTracker():
     def getAdded(self):
         return self.added
 
-    def register(self, centroid):
+    def setType(self,trackerType):
+        self.type = trackerType
+    def getSum(self):
+        return self.total_sum
+    # u tracker se objekat registruje tek kada prodje ispod linije
+    # cim se registruje vrsi se dodavanje/oduzimanje u zavisnosti od vrste trackere i vrsi se dalje pracenje objekta
+    def register(self, centroid, boxes, frame, loaded_model):
+        regions = []
+        alphabet = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+        blur = cv2.GaussianBlur(frame, (5, 5), 0)
+        img = image_bin(image_gray(blur))
+        region = img[boxes[1] - 4:boxes[1] - 4 + boxes[3]-boxes[1] + 8, boxes[0] - 8:boxes[0] - 8 + boxes[2]-boxes[0] + 16]
+        resized = resize_region(region)
+        scaled = scale_to_range(resized)
+        vector = matrix_to_vector(scaled)
+        regions.append(vector)
+        result_ann = loaded_model.predict(np.array(regions, np.float32))
+        if(self.type == "BLUE"):
+            temp = display_result(result_ann, alphabet)
+            self.total_sum += temp[0]
+        else:
+            temp = display_result(result_ann, alphabet)
+            self.total_sum += temp[0]
         # when registering an object we use the next available object
         # ID to store the centroid
-        self.added[self.nextObjectID] = False
+        # ako je registrovan to znaci da je prosao ipsod linije - dodat je
         self.objects[self.nextObjectID] = centroid
         self.disappeared[self.nextObjectID] = 0
         self.nextObjectID += 1
@@ -46,76 +73,68 @@ class CentroidTracker():
         # to deregister an object ID we delete the object ID from
         # both of our respective dictionaries
         del self.objects[objectID]
-        #del self.disappeared[objectID]
+        del self.disappeared[objectID]
 
     def getAdded(self):
         return self.added
 
-    def update(self, rects,x1,y1,x2,y2):
-        # check to see if the list of input bounding box rectangles
-        # is empty
+    def update(self, rects,x1,y1,x2,y2, frame, loaded_model):
+        # proveri da li su se javile konture
         if len(rects) == 0:
             remove = []
             # proveri sve koje vec pratis i vidi da li su ispali iz opsega
+            # ili su prekoracili broj frejmova za koje su "nestali"
             for objectID in self.objects.keys():
                 centroid = self.objects[objectID]
-                #self.disappeared[objectID] += 1
+                self.disappeared[objectID] += 1
+
                 if self.disappeared[objectID] > self.maxDisappeared:
                     remove.append(objectID)
 
-                if centroid[1] > y1 and centroid[0] < x1 and centroid[0] > x2:
+                if centroid[1] > y1 + 5 and centroid[0] < x1 - 5 and centroid[0] > x2 + 5:
                     if objectID in remove:
                         continue
                     else:
                         remove.append(objectID)
-                #     if centroid[1] > y1 + 40 or centroid[0] > x2 + 30:
-                #         remove.append(objectID)
-                for r in remove:
-                    self.deregister(r)
-            # return early as there are no centroids or tracking info
-            # to update
+            for r in remove:
+                self.deregister(r)
+            # izadji odma posto nema novih kontura
             return self.objects
-        # initialize an array of input centroids for the current frame
+
+        # inicijalizuj input centroide za trenutni frejm
         inputCentroids = np.zeros((len(rects), 2), dtype="int")
-        # loop over the bounding box rectangles
+        boxes = []
         for (i, (startX, startY, endX, endY)) in enumerate(rects):
-            # use the bounding box coordinates to derive the centroid
             cX = int((startX + endX) / 2.0)
             cY = int((startY + endY) / 2.0)
             inputCentroids[i] = (cX, cY)
+            boxes.append(rects[i])
 
-
-        # if we are currently not tracking any objects take the input
-        # centroids and register each of them
+        # ako ne pratimo objekte uzmi input centroida i registruj ih
         if len(self.objects) == 0:
             for i in range(0, len(inputCentroids)):
-                self.register(inputCentroids[i])
+                self.register(inputCentroids[i], boxes[i], frame, loaded_model)
 
-        # otherwise, are are currently tracking objects so we need to
-        # try to match the input centroids to existing object
-        # centroids
+        # u suprotnom, pratimo vec objekte i treba da ih povezemo sa
+        # odgovarajucim centroidima iz inputa
         else:
-            #grab the set of object IDs and corresponding centroids
             objectIDs = list(self.objects.keys())
             objectCentroids = list(self.objects.values())
-            # compute the distance between each pair of object
-            # centroids and input centroids, respectively -- our
-            # goal will be to match an input centroid to an existing
-            # object centroid
+
+            # izracunaj daljinu izmedju objekata koje pratis i novih pozicija pojedinacno - input centroida
+            # koji predstavljaju pomeraje u odnosu na proslu poziciju
+            # D je niz nizova, svaki niz sadrzi daljine izmedju objekta koji se prati i novih pozicija
             D = dist.cdist(np.array(objectCentroids), inputCentroids)
-            # in order to perform this matching we must (1) find the
-            # smallest value in each row and then (2) sort the row
-            # indexes based on their minimum values so that the row
-            # with the smallest value is at the *front* of the index
-            # list
+
+            # D.min(axis=1) vraca minimalno rastojanje izmedju objekta koji se prati i novih pozicija
+            # sortiraj kako bi dobio id-eve
             rows = D.min(axis=1).argsort()
-            # next, we perform a similar process on the columns by
-            # finding the smallest value in each column and then
-            # sorting using the previously computed row index list
+
+            # cols sadrzi informaciju o tome na kom indeksu se nalazi nova pozicija
+            # za svaki objekat iz input centroida
+            # uradi se argmin() za odgovarajuce id-eve (indexe) iz rows
             cols = D.argmin(axis=1)[rows]
-            # in order to determine if we need to update, register,
-            # or deregister an object we need to keep track of which
-            # of the rows and column indexes we have already examined
+
             usedRows = set()
             usedCols = set()
             # loop over the combination of the (row, column) index
@@ -133,17 +152,17 @@ class CentroidTracker():
                 objectID = objectIDs[row]
                 self.objects[objectID] = inputCentroids[col]
                 self.disappeared[objectID] = 0
+                # indicate that we have examined each of the row and
+                # column indexes, respectively
                 usedRows.add(row)
                 usedCols.add(col)
             # compute both the row and column index we have NOT yet
             # examined
-            # ako je u un
             unusedRows = set(range(0, D.shape[0])).difference(usedRows)
             unusedCols = set(range(0, D.shape[1])).difference(usedCols)
 
             # ako je broj objects veci od broja inputa mora se proveriti da li je
             # object nestao - moze se desiti ako se preklope brojevi ili ako prelazi preko linije
-            # postaviti uslov ako prelazi liniju da ima fore 3 frejma ?
             if D.shape[0] >= D.shape[1]:
                 # loop over the unused row indexes
                 remove = []
@@ -152,24 +171,22 @@ class CentroidTracker():
                     centroid = self.objects[objectID]
                     self.disappeared[objectID] += 1
 
-                    if self.disappeared[objectID] >= self.maxDisappeared:
-                        remove.append(objectID)
+                    if self.disappeared[objectID] > self.maxDisappeared:
+                        self.deregister(objectID)
 
-                    if centroid[1] > y1 + 5 and centroid[0] < x1 and centroid[0] > x2 + 5:
+                    if centroid[1] > y1 + 5 and centroid[0] < x1 - 5 and centroid[0] > x2 + 5:
                         if objectID in remove:
                             continue
                         else:
                             remove.append(objectID)
-
                     for r in remove:
-                        if r in self.objects.keys():
-                            self.deregister(r)
+                        self.deregister(r)
             # otherwise, if the number of input centroids is greater
             # than the number of existing object centroids we need to
             # register each new input centroid as a trackable object
             else:
                 for col in unusedCols:
-                    self.register(inputCentroids[col])
+                    self.register(inputCentroids[col], boxes[col], frame, loaded_model)
 
         # return the set of trackable objects
         return self.objects

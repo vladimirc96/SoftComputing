@@ -6,9 +6,10 @@ import collections
 import math
 # keras
 from keras.models import Sequential
-from keras.layers.core import Dense,Activation
+from keras.layers.core import Dense,Activation, Dropout
 from keras.optimizers import SGD
-
+from keras.datasets import mnist
+from keras.utils import np_utils
 
 def calculateDistance(x1, y1, x2, y2):
     dist = math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
@@ -47,7 +48,7 @@ def resize_region(region):
         print(region.shape)
         print(str(e))
 
-def select_roi(image_orig, image_bin,rects):
+def select_roi(image_orig, image_bin):
     '''Oznaciti regione od interesa na originalnoj slici. (ROI = regions of interest)
         Za svaki region napraviti posebnu sliku dimenzija 28 x 28.
         Za označavanje regiona koristiti metodu cv2.boundingRect(contour).
@@ -122,24 +123,36 @@ def create_ann():
     '''Implementacija veštačke neuronske mreže sa 784 neurona na uloznom sloju,
         128 neurona u skrivenom sloju i 10 neurona na izlazu. Aktivaciona funkcija je sigmoid.
     '''
-    ann = Sequential()
-    ann.add(Dense(128, input_dim=784, activation='sigmoid'))
-    # 10
-    ann.add(Dense(10, activation='sigmoid'))
-    return ann
+    model = Sequential()
+    model.add(Dense(512, input_shape=(784,)))
+    model.add(Activation('relu'))
+    model.add(Dropout(0.2))
+    model.add(Dense(512))
+    model.add(Activation('relu'))
+    model.add(Dropout(0.2))
+    model.add(Dense(10))
+    model.add(Activation('softmax'))
+    model.compile(loss='categorical_crossentropy', optimizer='adam')
 
-
-def train_ann(ann, X_train, y_train):
+def train_ann(ann):
     '''Obucavanje vestacke neuronske mreze'''
-    X_train = np.array(X_train, np.float32)  # dati ulazi
-    y_train = np.array(y_train, np.float32)  # zeljeni izlazi za date ulaze
+    # spremi trening skup
+    nb_classes = 10
+    # ucitaj trening skup pomocu keras biblioteke
+    (X_train, y_train), (X_test, y_test) = mnist.load_data()
 
-    # definisanje parametra algoritma za obucavanje
-    sgd = SGD(lr=0.01, momentum=0.9)
-    ann.compile(loss='mean_squared_error', optimizer=sgd)
+    # pretvori slike iz 28x28 u vektor od 784 elemenata
+    X_train = X_train.reshape(60000, 784)
+    X_train = X_train.astype('float32')
+
+    # skalirati elemente od 0 - 255 na 0 - 1
+    X_train /= 255
+
+    # one hot prezentacija za svaki broj
+    Y_train = np_utils.to_categorical(y_train, nb_classes)
 
     # obucavanje neuronske mreze
-    ann.fit(X_train, y_train, epochs=2000, batch_size=1, verbose=0, shuffle=False)
+    ann.fit(X_train, Y_train, batch_size=256, epochs=500, verbose=1)
 
     return ann
 
@@ -159,50 +172,28 @@ def display_result(outputs, alphabet):
 def greenLine(frame):
     # Convert BGR to HSV
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-
     # define range of green color in HSV
     lower_green = np.array([50, 100, 100])
     upper_green = np.array([70, 255, 255])
-
     # Threshold the HSV image to get only blue colors
     mask = cv2.inRange(hsv, lower_green, upper_green)
-
     # Bitwise-AND mask and original image
     res = cv2.bitwise_and(frame, frame, mask=mask)
-    return mask
+    return res
 
 def blueLine(frame):
     # Convert BGR to HSV
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-
     # define range of blue color in HSV
     lower_blue = np.array([110, 50, 50])
     upper_blue = np.array([130, 255, 255])
-
     # Threshold the HSV image to get only blue colors
     mask = cv2.inRange(hsv, lower_blue, upper_blue)
-
     # Bitwise-AND mask and original image
     res = cv2.bitwise_and(frame, frame, mask=mask)
-    return mask
+    return res
 
-def findPoints(frame):
-    contours, hierarchy = cv2.findContours(frame, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-    rc = cv2.minAreaRect(contours[0])
-    box = cv2.boxPoints(rc)
-    points = []
-    i = 0
-    for p in box:
-        pt = (p[0], p[1])
-        if i == 0 or i == 3:
-            print("X:", p[0], "Y: ", p[1])
-            points.append(p[0])
-            points.append(p[1])
-        i += 1
-        cv2.circle(frame, pt, 5, (200, 0, 0), 2)
-
-    return points
-
+# racuna nagib - koeficijent pravca
 def calculate_slope(x1,y1,x2,y2):
     k = (y2 - y1) / (x2 - x1)
     return k;
@@ -211,9 +202,9 @@ def calculate_offset(k,x1,y1):
     n = -k*x1 + y1
     return n
 
-def isOnLine(x1,y1,k,n):
-    temp = (-k*x1+n)
-    if temp <= (y1 + 1.5) or temp >= (y1-1.5):
+def isUnderLine(x1,y1,k,n):
+    temp = k*x1+n
+    if temp <= y1:
         return True
     else:
         return False

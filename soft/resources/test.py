@@ -22,11 +22,11 @@ with open("out.txt") as file:
     data = file.read()
     lines = data.split('\n')
     for id, line in enumerate(lines):
-        cols = line.split('\t')
+        cols = line.split(' ')
         if(cols[0] == ''):
             continue
         if(id==0):
-            student = cols  
+            student = cols
         elif(id>1):
             cols[1] = cols[1].replace('\r', '')
             student_results.append(float(cols[1]))
@@ -36,6 +36,6 @@ for index, res_col in enumerate(res):
     diff += abs(res_col - student_results[index])
 percentage = 100 - abs(diff/sum(res))*100
 
-print student
-print 'Procenat tacnosti:\t'+str(percentage)
-print 'Ukupno:\t'+str(n)
+print(student)
+print('Procenat tacnosti:\t'+str(percentage))
+print('Ukupno:\t'+str(n))

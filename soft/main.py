@@ -87,7 +87,7 @@ print("Loaded model from disk")
 # evaluate loaded model on test data
 loaded_model.compile(loss='categorical_crossentropy', optimizer='adam')
 
-for i in range(10):
+for i in range(0,1):
     # inicijalazicja centroidtrackera, posebno se koristi za zelenu i plavu liniju
     ct_blue = CentroidTracker()
     ct_blue.setType("BLUE")

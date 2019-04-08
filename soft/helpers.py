@@ -120,9 +120,6 @@ def convert_output(alphabet):
     return np.array(nn_outputs)
 
 def create_ann():
-    '''Implementacija veštačke neuronske mreže sa 784 neurona na uloznom sloju,
-        128 neurona u skrivenom sloju i 10 neurona na izlazu. Aktivaciona funkcija je sigmoid.
-    '''
     model = Sequential()
     model.add(Dense(512, input_shape=(784,)))
     model.add(Activation('relu'))
